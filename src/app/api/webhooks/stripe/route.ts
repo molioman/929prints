@@ -23,67 +23,52 @@ export async function POST(req: NextRequest) {
 
   if (event.type === 'checkout.session.completed') {
     const session = event.data.object as Stripe.Checkout.Session
-    const supabase = createAdminClient()
-
-    type CartLine = { id: string; name: string; image: string | null; price: number; quantity: number }
-    let cart: CartLine[] = []
-    try {
-      cart = JSON.parse(session.metadata?.cart ?? '[]')
-    } catch {
-      cart = []
+    const orderId = session.metadata?.order_id
+    if (!orderId) {
+      console.error('No order_id in session metadata')
+      return NextResponse.json({ received: true })
     }
 
-    const subtotal = cart.reduce((s, i) => s + i.price * i.quantity, 0)
-    const shipping = (session.shipping_cost?.amount_total ?? 0) / 100
-    const total = (session.amount_total ?? 0) / 100
+    const supabase = createAdminClient()
+    const addr = session.customer_details?.address
 
-    // Create the order
-    const { data: order, error: orderError } = await supabase
+    // Mark the pending order as paid and attach the shipping address.
+    const { error: updateError } = await supabase
       .from('orders')
-      .insert({
+      .update({
         status: 'processing',
-        subtotal,
-        shipping_cost: shipping,
-        tax: 0,
-        total,
-        shipping_address: session.customer_details?.address
+        shipping_address: addr
           ? {
-              full_name: session.customer_details.name ?? '',
-              address_line1: session.customer_details.address.line1 ?? '',
-              address_line2: session.customer_details.address.line2 ?? '',
-              city: session.customer_details.address.city ?? '',
-              state: session.customer_details.address.state ?? '',
-              zip: session.customer_details.address.postal_code ?? '',
-              country: session.customer_details.address.country ?? 'US',
+              full_name: session.customer_details?.name ?? '',
+              address_line1: addr.line1 ?? '',
+              address_line2: addr.line2 ?? '',
+              city: addr.city ?? '',
+              state: addr.state ?? '',
+              zip: addr.postal_code ?? '',
+              country: addr.country ?? 'US',
             }
           : null,
-        notes: `Stripe session ${session.id}`,
+        updated_at: new Date().toISOString(),
       })
-      .select()
-      .single()
+      .eq('id', orderId)
 
-    if (orderError || !order) {
-      console.error('Failed to create order:', orderError)
-      return NextResponse.json({ error: 'Failed to save order' }, { status: 500 })
+    if (updateError) {
+      console.error('Failed to update order:', updateError)
+      return NextResponse.json({ error: 'Failed to update order' }, { status: 500 })
     }
 
-    // Create order items
-    if (cart.length > 0) {
-      await supabase.from('order_items').insert(
-        cart.map(i => ({
-          order_id: order.id,
-          product_id: i.id,
-          product_name: i.name,
-          product_image: i.image,
-          quantity: i.quantity,
-          unit_price: i.price,
-          total_price: i.price * i.quantity,
-        }))
-      )
+    // Decrement stock for each item in the order.
+    const { data: orderItems } = await supabase
+      .from('order_items')
+      .select('product_id, quantity')
+      .eq('order_id', orderId)
 
-      // Decrement stock for each product
-      for (const i of cart) {
-        await supabase.rpc('decrement_stock', { p_product_id: i.id, p_qty: i.quantity })
+    for (const item of orderItems ?? []) {
+      if (item.product_id) {
+        await supabase.rpc('decrement_stock', {
+          p_product_id: item.product_id,
+          p_qty: item.quantity,
+        })
       }
     }
   }
