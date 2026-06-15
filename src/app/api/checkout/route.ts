@@ -35,6 +35,17 @@ export async function POST(req: NextRequest) {
         },
       ],
       automatic_tax: { enabled: false },
+      metadata: {
+        cart: JSON.stringify(
+          items.map(({ product, quantity }) => ({
+            id: product.id,
+            name: product.name,
+            image: product.images?.[0] ?? null,
+            price: product.price,
+            quantity,
+          }))
+        ),
+      },
       success_url: `${origin}/checkout/success?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${origin}/cart`,
     })
