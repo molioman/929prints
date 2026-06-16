@@ -10,6 +10,7 @@ const navLinks = [
   { href: '/categories', label: 'Categories' },
   { href: '/about', label: 'About' },
   { href: '/contact', label: 'Contact' },
+  { href: '/connect', label: 'Sell' },
 ]
 
 export default function Navbar() {
