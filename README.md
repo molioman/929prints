@@ -1,36 +1,64 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# 929 Prints
 
-## Getting Started
+One codebase for several storefront brands, each backed by its own Shopify
+store. Orders are produced in-house or by outside providers, controlled by an
+outsourcing switch.
 
-First, run the development server:
+- **Shopify**: one store per brand. Catalog, checkout, payments, tax, customer emails.
+- **Vercel**: this Next.js app. Serves every brand, choosing the brand by domain.
+- **Supabase**: fulfillment routing settings, the in-house production queue,
+  and (later) bulk/custom quotes.
+
+## Brands
+
+Brands are listed in `src/lib/brands.ts` and seeded in the `brands` table.
+
+| Slug | Brand | Purpose |
+|---|---|---|
+| `dachshund` | name TBD | Retail merch for dachshunds and their owners |
+| `929prints` | 929 Prints | Bulk/custom orders and design services |
+
+`src/proxy.ts` rewrites each request to `/<slug>/...` based on the host. To add a
+brand: add it to `BRANDS`, insert it into `brands`, set its `SHOPIFY_<SLUG>_*`
+env vars, and point its domain at the Vercel project.
+
+## Fulfillment routing
+
+Each Shopify product gets a row in `product_fulfillment` with one of three modes:
+
+| Mode | Outsourcing on | Outsourcing off |
+|---|---|---|
+| `inhouse` | shown, made in-house | shown, made in-house |
+| `outsourced` | shown, sent to its provider | **hidden**; orders that slip through are held |
+| `both` | shown, uses `preferred_route` | shown, made in-house |
+
+The global switch is `fulfillment_settings.outsourcing_enabled`. Each provider
+(`fulfillment_providers`) can also be disabled on its own. Ordered products with
+no `product_fulfillment` row are held instead of guessed.
+
+Paid orders arrive at `POST /api/webhooks/shopify/<slug>` (Shopify topic
+`orders/paid`). The webhook is verified, split into `fulfillment_jobs` (one per
+in-house queue, provider, or hold reason) and saved in one transaction. A
+redelivered order is ignored. The rules are in `src/lib/fulfillment/routing.ts`.
+
+## Development
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+cp .env.example .env.local   # fill in Supabase + Shopify values
+npm install
+npm run dev                  # http://localhost:3000 serves DEFAULT_BRAND
+                             # http://929prints.localhost:3000 serves 929prints
+npm test
+npm run typecheck
+npm run lint
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Apply database migrations with the Supabase CLI: `supabase db push`.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Not built yet
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
-
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- Storefront pages (Shopify Storefront API) and hiding products in Shopify when
+  the switch changes
+- Submitting outsourced jobs to Printful and sending tracking back to Shopify
+- Admin pages: the switch, product modes, production queue
+- Bulk/custom quote requests on the 929 Prints site
